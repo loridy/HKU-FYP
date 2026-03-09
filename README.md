@@ -5,114 +5,109 @@
 ## Project Title (Fixed)
 **Next-Gen Stock Selection: A Comparative Study of Machine Learning Models for US Market Forecasting**
 
----
-
-## 1) What this repo is for
-This repository is the **single source of truth** for our FYP reboot.
-
-Current goal (v1):
-- Build a reproducible ML pipeline for **binary direction prediction**
-- Compare models across **multiple horizons**: 1D / 3D / 5D / 10D
-- Start with a **pilot subset (20 names)**, then scale toward S&P 500
-- Produce report-ready tables/figures + reproducible code
-
-No app is required for final submission. Focus is research + implementation.
+Repository: <https://github.com/loridy/HKU-FYP>
 
 ---
 
-## 2) Current status (as of now)
-✅ Repo initialized and pushed  
-✅ Legacy notebooks imported  
-✅ Master baseline notebook created  
-✅ v1.1 notebook added with:
-- naive benchmarks (always-up, random-frequency)
-- threshold tuning on validation set
-- confusion matrix + per-class metrics
+## What this repo is for
+Single source of truth for our FYP reboot.
 
-⚠️ Current early results show headline accuracy > 50%, but balanced accuracy is close to ~0.50 in older runs, so we must validate carefully with v1.1 outputs.
+Current focus:
+- Binary direction prediction (up/down)
+- Multi-horizon comparison: 1D / 3D / 5D / 10D
+- Feature engineering comparison (A/B/C ablation)
+- Reproducible outputs for report + slides + code submission
 
 ---
 
-## 3) Repository structure
+## Current notebook flow (run in this order)
 
-- `docs/`
-  - `project-charter.md` — fixed scope/objective
-  - `methodology.md` — practical method + metric plan
-  - `final-delivery-plan.md` — submission checklist and story flow
-- `tasks/`
-  - `weekly-roadmap.md` — finish-safe execution plan
-- `notebooks/`
-  - `legacy_notebook_1.ipynb`
-  - `legacy_notebook_2.ipynb`
-  - `00_master_pipeline.ipynb` — quick baseline run
-  - `01_benchmark_threshold_confusion.ipynb` — recommended main notebook now
-- `outputs/`
-  - `metrics/` — experiment CSV outputs
-  - `tables/` — summary tables for reporting
-  - `figures/` — charts/plots
-  - `models/` — optional saved artifacts
-- `data/`
-  - `raw/`, `processed/`, `external/`
+### 0) Baseline quick run
+- `notebooks/00_master_pipeline.ipynb`
+- Purpose: first end-to-end sanity run
+
+### 1) Benchmark + threshold + confusion matrix
+- `notebooks/01_benchmark_threshold_confusion.ipynb`
+- Adds:
+  - always-up / random baselines
+  - threshold tuning on validation set
+  - confusion metrics & class-wise metrics
+
+### 2) Feature ablation + leakage guards (latest)
+- `notebooks/02_ablation_leakage_guards.ipynb`
+- Adds:
+  - A/B/C feature sets
+  - leakage guard checks
+  - split metadata export
+  - data quality summary export
 
 ---
 
-## 4) How teammates should run (first)
+## How teammates should run
 
 ### Environment
-Recommended Python 3.10+.
+Python 3.10+ recommended.
 
-Install packages:
+Install deps:
 ```bash
 pip install yfinance pandas numpy scikit-learn matplotlib seaborn xgboost
 ```
 
-### Run order
-1. Open `notebooks/01_benchmark_threshold_confusion.ipynb`
-2. Run all cells end-to-end
-3. Check generated files:
-   - `outputs/metrics/pilot_v1_1_metrics.csv`
-   - `outputs/tables/pilot_v1_1_summary_table.csv`
+### Execution
+1. Open Jupyter in repo root.
+2. Run notebook `02_ablation_leakage_guards.ipynb` end-to-end (preferred current pipeline).
+3. Verify generated outputs:
+   - `outputs/metrics/pilot_v1_2_ablation_metrics.csv`
+   - `outputs/tables/data_quality_summary.csv`
+   - `outputs/metadata/v1_2_run_metadata.json`
 
-If xgboost is unavailable, notebook will use fallback model automatically.
+If `xgboost` is unavailable, fallback model is used automatically.
 
 ---
 
-## 5) Evaluation framework (current)
-Primary metrics for direction task:
+## Evaluation metrics (current)
+Primary:
 - **Balanced Accuracy** (main metric)
 - Accuracy
 - F1 (up class)
-- Precision/Recall (up + down)
-- Confusion matrix (TN/FP/FN/TP)
 
-Benchmarks included:
-- Always-up baseline
-- Random-frequency baseline
+Supporting (in v1.1):
+- Precision/Recall (up & down)
+- Confusion matrix components
+- Class distribution checks
 
-Why this matters:
-- In trending markets, a model can look good by overpredicting “up.”
-- Balanced accuracy + per-class recall helps detect fake edge.
+Why: plain accuracy can be misleading in up-trending markets.
 
 ---
 
-## 6) Team workflow rules
-- Keep notebooks simple and debug-friendly.
-- Commit small, clear changes with descriptive messages.
-- Save result CSVs in `outputs/` so everyone can reproduce interpretations.
-- No major scope expansion (news/sentiment/backtest engine) until v1 is stable.
+## Feature ablation design
+- **A_technical**
+- **B_tech_fund**
+- **C_tech_fund_macro**
+
+Goal: test whether extra feature groups genuinely improve out-of-sample performance.
 
 ---
 
-## 7) Immediate next steps
-1. Run v1.1 notebook and confirm benchmark comparison.
-2. Decide whether tuned thresholds improve balanced accuracy materially.
-3. Add feature-set ablation (Technical vs +Fundamental vs +Macro).
-4. Scale from pilot 20 names to broader universe.
+## Repo structure
+- `docs/` methodology, plan, self-improve Q&A, improvement notes
+- `tasks/` weekly roadmap
+- `notebooks/` all experiment notebooks
+- `outputs/` generated metrics/tables/metadata/figures
+- `data/` raw/processed/external staging
 
 ---
 
-## 8) Deliverables required
-- Individual report (< 50 pages each)
+## Team rules (short)
+- Keep changes small and commit clearly.
+- Keep outputs in `outputs/` for reproducibility.
+- Prefer notebook simplicity over over-engineered framework during final phase.
+- Do not expand scope (news/sentiment/full backtest engine) before core pipeline is stable.
+
+---
+
+## Deliverables required
+- Individual report (<50 pages each)
 - Slides
 - 1-minute video
 - Code submission (reproducible)
