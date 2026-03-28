@@ -23,13 +23,20 @@ def _normalize_download_frame(df: pd.DataFrame, ticker: Optional[str] = None) ->
 
         if lvl1 & field_names:
             # ticker-first -> stack ticker level (0)
-            df = df.stack(level=0, future_stack=True).reset_index().rename(columns={"level_1": "ticker"})
+            df = df.stack(level=0, future_stack=True).reset_index()
         elif lvl0 & field_names:
             # field-first -> stack ticker level (1)
-            df = df.stack(level=1, future_stack=True).reset_index().rename(columns={"level_1": "ticker"})
+            df = df.stack(level=1, future_stack=True).reset_index()
         else:
             # fallback: keep previous behavior
-            df = df.stack(level=1, future_stack=True).reset_index().rename(columns={"level_1": "ticker"})
+            df = df.stack(level=1, future_stack=True).reset_index()
+
+        # Robust ticker-column normalization across yfinance/pandas variants
+        if "ticker" not in df.columns:
+            for cand in ["Ticker", "level_1", "level_0", "symbol", "Symbol"]:
+                if cand in df.columns:
+                    df = df.rename(columns={cand: "ticker"})
+                    break
     else:
         df = df.reset_index()
         df["ticker"] = ticker
@@ -48,6 +55,12 @@ def _normalize_download_frame(df: pd.DataFrame, ticker: Optional[str] = None) ->
     for col in keep:
         if col not in df.columns:
             df[col] = pd.NA
+
+    # If ticker column is still missing/empty, fallback to provided ticker for single-symbol calls.
+    if "ticker" in df.columns and ticker is not None:
+        if df["ticker"].isna().all() or (df["ticker"].astype(str).str.strip() == "").all():
+            df["ticker"] = ticker
+
     df = df[keep].copy()
     df["date"] = pd.to_datetime(df["date"])
     return df.sort_values(["ticker", "date"]).reset_index(drop=True)
