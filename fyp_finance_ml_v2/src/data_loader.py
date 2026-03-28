@@ -14,7 +14,22 @@ def _normalize_download_frame(df: pd.DataFrame, ticker: Optional[str] = None) ->
         return pd.DataFrame(columns=["date", "ticker", "open", "high", "low", "close", "adj_close", "volume"])
 
     if isinstance(df.columns, pd.MultiIndex):
-        df = df.stack(level=1, future_stack=True).reset_index().rename(columns={"level_1": "ticker"})
+        # yfinance multi-ticker format may be either:
+        # - level0=ticker, level1=field (most common)
+        # - level0=field, level1=ticker
+        field_names = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
+        lvl0 = set(map(str, df.columns.get_level_values(0).unique()))
+        lvl1 = set(map(str, df.columns.get_level_values(1).unique()))
+
+        if lvl1 & field_names:
+            # ticker-first -> stack ticker level (0)
+            df = df.stack(level=0, future_stack=True).reset_index().rename(columns={"level_1": "ticker"})
+        elif lvl0 & field_names:
+            # field-first -> stack ticker level (1)
+            df = df.stack(level=1, future_stack=True).reset_index().rename(columns={"level_1": "ticker"})
+        else:
+            # fallback: keep previous behavior
+            df = df.stack(level=1, future_stack=True).reset_index().rename(columns={"level_1": "ticker"})
     else:
         df = df.reset_index()
         df["ticker"] = ticker

@@ -17,6 +17,9 @@ def _rsi(series: pd.Series, window: int = 14) -> pd.Series:
 
 
 def add_finance_features(prices: pd.DataFrame) -> pd.DataFrame:
+    if prices.empty:
+        raise ValueError("Input prices DataFrame is empty before feature engineering.")
+
     frames = []
     for ticker, grp in prices.groupby("ticker", sort=False):
         g = grp.sort_values("date").copy()

@@ -52,6 +52,12 @@ def run_pipeline(notebook_tag: str = "02", mode: str = "synthetic", config: AppC
     prices, benchmark, macro, fundamentals = load_data(config, mode=mode)
     prices = prices.loc[prices["ticker"].isin(config.tickers)].copy()
 
+    if prices.empty:
+        raise ValueError(
+            "No price rows after loading/filtering tickers. "
+            "Check internet access, yfinance availability, or ticker normalization in downloaded data."
+        )
+
     feature_df = build_feature_frame(prices, benchmark, macro, fundamentals)
     full_df = add_forward_labels(feature_df, config.horizons)
 
