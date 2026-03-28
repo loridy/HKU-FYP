@@ -1,0 +1,7 @@
+notebook_tag,mode,feature_set,feature_groups,model,n_features_used,horizon_days,alpha_ann,excess_ann_return,information_ratio
+demo1d,synthetic,F1_momentum,momentum,logistic_regression,7,1,-0.03492161822443829,-0.0528343073768468,-0.11333957749011733
+demo1d,synthetic,F1_momentum,momentum,random_forest,7,1,0.028024520003316233,0.002206833698515265,0.12497443660309278
+demo1d,synthetic,F3_plus_risk_liquidity,"momentum,reversal,volatility,liquidity",logistic_regression,16,1,-0.05293188689268091,-0.06912292603541015,-0.18570161352965517
+demo1d,synthetic,F3_plus_risk_liquidity,"momentum,reversal,volatility,liquidity",random_forest,16,1,-0.004730973859347731,-0.026102550222869003,-0.0034339337942270736
+demo1d,synthetic,F5_full_finance,"momentum,reversal,volatility,liquidity,cross_sectional,macro,fundamental",logistic_regression,33,1,-0.009491536162887337,-0.0304839910814102,-0.018411160325923798
+demo1d,synthetic,F5_full_finance,"momentum,reversal,volatility,liquidity,cross_sectional,macro,fundamental",random_forest,33,1,-0.08156175580041758,-0.0940288803384497,-0.3063532137381343

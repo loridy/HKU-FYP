@@ -1,0 +1,70 @@
+from __future__ import annotations
+
+from typing import Tuple
+
+import pandas as pd
+
+from .evaluation import summarize_return_series, compute_relative_metrics
+
+
+def run_top_k_backtest(df: pd.DataFrame, score_col: str, ret_col: str, top_k: int = 5, transaction_cost_bps: float = 10.0) -> Tuple[pd.DataFrame, dict]:
+    daily = []
+    prev_names: set[str] = set()
+    cost_rate = transaction_cost_bps / 10000.0
+
+    for date, g in df.groupby("date"):
+        g = g[["ticker", score_col, ret_col]].dropna().sort_values(score_col, ascending=False)
+        if len(g) < top_k:
+            continue
+        picks = g.head(top_k)
+        current_names = set(picks["ticker"])
+        turnover = 0.0 if not prev_names else len(current_names.symmetric_difference(prev_names)) / max(top_k, 1)
+        gross_ret = picks[ret_col].mean()
+        cost = turnover * cost_rate
+        net_ret = gross_ret - cost
+        daily.append({
+            "date": date,
+            "gross_ret": gross_ret,
+            "net_ret": net_ret,
+            "turnover": turnover,
+            "cost_drag": cost,
+        })
+        prev_names = current_names
+
+    out = pd.DataFrame(daily).sort_values("date").reset_index(drop=True)
+    summary = summarize_return_series(out["net_ret"]) if not out.empty else {}
+    summary["avg_turnover"] = float(out["turnover"].mean()) if not out.empty else float("nan")
+    summary["avg_cost_drag"] = float(out["cost_drag"].mean()) if not out.empty else float("nan")
+    return out, summary
+
+
+def run_momentum_baseline(df: pd.DataFrame, rank_col: str, ret_col: str, top_k: int = 5, transaction_cost_bps: float = 10.0) -> Tuple[pd.DataFrame, dict]:
+    baseline = df[["date", "ticker", rank_col, ret_col]].copy()
+    rank_data = baseline[rank_col]
+    if isinstance(rank_data, pd.DataFrame):
+        rank_data = rank_data.iloc[:, 0]
+    baseline["score"] = rank_data
+    return run_top_k_backtest(baseline, score_col="score", ret_col=ret_col, top_k=top_k, transaction_cost_bps=transaction_cost_bps)
+
+
+def run_benchmark_buy_hold(benchmark_df: pd.DataFrame, horizon: int = 1) -> Tuple[pd.DataFrame, dict]:
+    bench = benchmark_df.sort_values("date").copy()
+    bench["ret_1"] = bench["benchmark_close"].pct_change(1)
+    if horizon == 1:
+        out = bench[["date", "ret_1"]].dropna().rename(columns={"ret_1": "net_ret"})
+    else:
+        out = bench[["date", "benchmark_close"]].copy()
+        out["net_ret"] = out["benchmark_close"].shift(-horizon) / out["benchmark_close"] - 1
+        out = out[["date", "net_ret"]].dropna()
+    return out, summarize_return_series(out["net_ret"])
+
+
+def relative_summary(strategy_daily: pd.DataFrame, benchmark_daily: pd.DataFrame) -> dict:
+    aligned = pd.merge(
+        strategy_daily[["date", "net_ret"]],
+        benchmark_daily[["date", "net_ret"]],
+        on="date",
+        suffixes=("_strategy", "_benchmark"),
+        how="inner",
+    )
+    return compute_relative_metrics(aligned["net_ret_strategy"], aligned["net_ret_benchmark"])
