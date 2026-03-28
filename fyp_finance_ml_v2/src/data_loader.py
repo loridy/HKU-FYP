@@ -66,7 +66,23 @@ def download_price_history(tickers: Iterable[str], start: str, end: str) -> pd.D
         group_by="ticker",
         threads=True,
     )
-    return _normalize_download_frame(raw)
+    out = _normalize_download_frame(raw)
+
+    # Fallback for environments where bulk download shape/behavior is inconsistent.
+    if out.empty:
+        frames = []
+        for t in tickers:
+            try:
+                one = yf.download(t, start=start, end=end, auto_adjust=False, progress=False)
+                one_norm = _normalize_download_frame(one, ticker=t)
+                if not one_norm.empty:
+                    frames.append(one_norm)
+            except Exception:
+                continue
+        if frames:
+            out = pd.concat(frames, ignore_index=True)
+
+    return out
 
 
 def download_single_series(ticker: str, start: str, end: str, value_name: str) -> pd.DataFrame:
