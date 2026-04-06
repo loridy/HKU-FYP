@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import matplotlib
+
+# Use non-interactive backend for CLI / headless execution
+matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd

@@ -7,7 +7,17 @@ import pandas as pd
 from .evaluation import summarize_return_series, compute_relative_metrics
 
 
-def run_top_k_backtest(df: pd.DataFrame, score_col: str, ret_col: str, top_k: int = 5, transaction_cost_bps: float = 10.0) -> Tuple[pd.DataFrame, dict]:
+def run_top_k_backtest(
+    df: pd.DataFrame,
+    score_col: str,
+    ret_col: str,
+    top_k: int = 5,
+    transaction_cost_bps: float = 10.0,
+) -> Tuple[pd.DataFrame, dict]:
+    """Original proxy backtest: uses precomputed forward return column (e.g., close(t+h)/close(t)-1).
+
+    This is fast for comparing signals, but it is not an execution-realistic trade simulator.
+    """
     daily = []
     prev_names: set[str] = set()
     cost_rate = transaction_cost_bps / 10000.0
@@ -19,7 +29,7 @@ def run_top_k_backtest(df: pd.DataFrame, score_col: str, ret_col: str, top_k: in
         picks = g.head(top_k)
         current_names = set(picks["ticker"])
         turnover = 0.0 if not prev_names else len(current_names.symmetric_difference(prev_names)) / max(top_k, 1)
-        gross_ret = picks[ret_col].mean()
+        gross_ret = float(picks[ret_col].mean())
         cost = turnover * cost_rate
         net_ret = gross_ret - cost
         daily.append({
@@ -35,6 +45,89 @@ def run_top_k_backtest(df: pd.DataFrame, score_col: str, ret_col: str, top_k: in
     summary = summarize_return_series(out["net_ret"]) if not out.empty else {}
     summary["avg_turnover"] = float(out["turnover"].mean()) if not out.empty else float("nan")
     summary["avg_cost_drag"] = float(out["cost_drag"].mean()) if not out.empty else float("nan")
+    summary["backtest_method"] = "proxy_forward_return"
+    return out, summary
+
+
+def run_top_k_execution_backtest(
+    df: pd.DataFrame,
+    score_col: str,
+    open_col: str,
+    horizon_days: int,
+    top_k: int = 5,
+    transaction_cost_bps: float = 10.0,
+    rebalance_every: int | None = None,
+) -> Tuple[pd.DataFrame, dict]:
+    """Execution-aware top-K backtest.
+
+    Convention:
+    - form signal on date t (using info available at t)
+    - enter at OPEN on t+1
+    - hold for `horizon_days`
+    - exit at OPEN on t+1+horizon_days
+
+    To avoid overlapping position bookkeeping complexity, we rebalance every `rebalance_every` days
+    (default = horizon_days).
+    """
+    if rebalance_every is None:
+        rebalance_every = max(int(horizon_days), 1)
+
+    cost_rate = transaction_cost_bps / 10000.0
+
+    work = df[["date", "ticker", score_col, open_col]].dropna().copy()
+    work = work.sort_values(["ticker", "date"])
+
+    # Pre-compute executed return per (ticker, signal_date)
+    g = work.groupby("ticker", sort=False)
+    entry_open = g[open_col].shift(-1)
+    exit_open = g[open_col].shift(-(horizon_days + 1))
+    entry_date = g["date"].shift(-1)
+    exit_date = g["date"].shift(-(horizon_days + 1))
+
+    work["entry_date"] = entry_date
+    work["exit_date"] = exit_date
+    work["exec_ret"] = (exit_open / entry_open) - 1
+
+    # Only keep rows where execution return is defined
+    work = work.dropna(subset=["exec_ret", "entry_date", "exit_date"])
+
+    # Rebalance on a calendar of unique signal dates
+    dates = sorted(work["date"].unique())
+    daily = []
+    prev_names: set[str] = set()
+
+    for i in range(0, len(dates), rebalance_every):
+        signal_date = dates[i]
+        slice_ = work[work["date"] == signal_date].copy()
+        slice_ = slice_.sort_values(score_col, ascending=False)
+        if len(slice_) < top_k:
+            continue
+
+        picks = slice_.head(top_k)
+        current_names = set(picks["ticker"])
+        turnover = 0.0 if not prev_names else len(current_names.symmetric_difference(prev_names)) / max(top_k, 1)
+
+        gross_ret = float(picks["exec_ret"].mean())
+        cost = turnover * cost_rate
+        net_ret = gross_ret - cost
+
+        # Use entry_date as the performance timestamp (when trade begins)
+        daily.append({
+            "date": picks["entry_date"].iloc[0],
+            "signal_date": signal_date,
+            "exit_date": picks["exit_date"].iloc[0],
+            "gross_ret": gross_ret,
+            "net_ret": net_ret,
+            "turnover": turnover,
+            "cost_drag": cost,
+        })
+        prev_names = current_names
+
+    out = pd.DataFrame(daily).sort_values("date").reset_index(drop=True)
+    summary = summarize_return_series(out["net_ret"]) if not out.empty else {}
+    summary["avg_turnover"] = float(out["turnover"].mean()) if not out.empty else float("nan")
+    summary["avg_cost_drag"] = float(out["cost_drag"].mean()) if not out.empty else float("nan")
+    summary["backtest_method"] = f"open_to_open_tplus1_hold_{int(horizon_days)}d_rebalance_{int(rebalance_every)}d"
     return out, summary
 
 

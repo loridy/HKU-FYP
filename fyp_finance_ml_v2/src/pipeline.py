@@ -7,7 +7,7 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 
-from .backtest import run_benchmark_buy_hold, run_momentum_baseline, run_top_k_backtest, relative_summary
+from .backtest import run_benchmark_buy_hold, run_momentum_baseline, run_top_k_backtest, run_top_k_execution_backtest, relative_summary
 from .config import AppConfig
 from .data_loader import load_data
 from .evaluation import compute_ml_metrics, compute_signal_metrics, decile_return_table
@@ -84,9 +84,9 @@ def run_pipeline(notebook_tag: str = "02", mode: str = "synthetic", config: AppC
         for feature_set_name, groups in config.feature_sets.items():
             feat_cols = feature_columns_for_set(groups)
             leakage_guard(feat_cols)
-            keep_cols = list(dict.fromkeys(["date", "ticker", "ret_5", label_col, ret_col] + feat_cols))
+            keep_cols = list(dict.fromkeys(["date", "ticker", "open", "ret_5", label_col, ret_col] + feat_cols))
             work = full_df[keep_cols].copy()
-            work = work.replace([np.inf, -np.inf], np.nan).dropna(subset=[label_col, ret_col])
+            work = work.replace([np.inf, -np.inf], np.nan).dropna(subset=[label_col, ret_col, "open"])
 
             train, val, test, split_meta = time_split(work, config.train_frac, config.val_frac)
             valid_feat_cols = [c for c in feat_cols if c in train.columns and train[c].notna().any()]
@@ -110,18 +110,21 @@ def run_pipeline(notebook_tag: str = "02", mode: str = "synthetic", config: AppC
                 test_proba = model.predict_proba(X_test)[:, 1]
                 test_pred = (test_proba >= threshold).astype(int)
 
-                scored_test = test[["date", "ticker", "ret_5", ret_col]].copy()
+                scored_test = test[["date", "ticker", "open", "ret_5", ret_col]].copy()
                 scored_test["score"] = test_proba
 
                 ml = compute_ml_metrics(y_test, test_pred, test_proba)
                 signal = compute_signal_metrics(scored_test, "score", ret_col, config.top_k, n_buckets=config.n_deciles)
 
-                bt_daily, bt_summary = run_top_k_backtest(
+                # Execution-aware backtest: signal at close(t), enter at open(t+1), hold `horizon` days.
+                bt_daily, bt_summary = run_top_k_execution_backtest(
                     scored_test,
                     score_col="score",
-                    ret_col=ret_col,
+                    open_col="open",
+                    horizon_days=horizon,
                     top_k=config.top_k,
                     transaction_cost_bps=config.transaction_cost_bps,
+                    rebalance_every=horizon,
                 )
                 rel = relative_summary(bt_daily, bench_daily)
 
