@@ -7,7 +7,13 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 
-from .backtest import run_benchmark_buy_hold, run_momentum_baseline, run_top_k_backtest, run_top_k_execution_backtest, relative_summary
+from .backtest import (
+    run_benchmark_buy_hold,
+    run_momentum_baseline,
+    run_top_k_execution_backtest,
+    run_top_k_execution_backtest_close_to_close,
+    relative_summary,
+)
 from .config import AppConfig
 from .data_loader import load_data
 from .evaluation import compute_ml_metrics, compute_signal_metrics, decile_return_table
@@ -17,7 +23,7 @@ from .leakage import leakage_guard
 from .models import build_models, choose_threshold
 from .splits import time_split
 from .utils import save_json
-from .visualizer import save_equity_curve, save_four_panel_summary, save_heatmap_table
+from .visualizer import save_four_panel_summary, save_heatmap_table
 
 
 def compute_data_quality(df: pd.DataFrame) -> pd.DataFrame:
@@ -80,13 +86,16 @@ def run_pipeline(notebook_tag: str = "02", mode: str = "synthetic", config: AppC
 
         bench_daily, bench_summary = run_benchmark_buy_hold(benchmark, horizon=horizon)
         curve_store[f"SPY_{horizon}D"] = bench_daily
+        # Persist benchmark curve so plotting can be done later without rerunning the pipeline
+        bench_path = config.output_dir / "curves" / f"{notebook_tag}_{mode}_SPY_{horizon}d_daily.csv"
+        bench_daily.to_csv(bench_path, index=False)
 
         for feature_set_name, groups in config.feature_sets.items():
             feat_cols = feature_columns_for_set(groups)
             leakage_guard(feat_cols)
-            keep_cols = list(dict.fromkeys(["date", "ticker", "open", "ret_5", label_col, ret_col] + feat_cols))
+            keep_cols = list(dict.fromkeys(["date", "ticker", "open", "close", "ret_5", label_col, ret_col] + feat_cols))
             work = full_df[keep_cols].copy()
-            work = work.replace([np.inf, -np.inf], np.nan).dropna(subset=[label_col, ret_col, "open"])
+            work = work.replace([np.inf, -np.inf], np.nan).dropna(subset=[label_col, ret_col, "open", "close"])
 
             train, val, test, split_meta = time_split(work, config.train_frac, config.val_frac)
             valid_feat_cols = [c for c in feat_cols if c in train.columns and train[c].notna().any()]
@@ -110,14 +119,15 @@ def run_pipeline(notebook_tag: str = "02", mode: str = "synthetic", config: AppC
                 test_proba = model.predict_proba(X_test)[:, 1]
                 test_pred = (test_proba >= threshold).astype(int)
 
-                scored_test = test[["date", "ticker", "open", "ret_5", ret_col]].copy()
+                scored_test = test[["date", "ticker", "open", "close", "ret_5", ret_col]].copy()
                 scored_test["score"] = test_proba
 
                 ml = compute_ml_metrics(y_test, test_pred, test_proba)
                 signal = compute_signal_metrics(scored_test, "score", ret_col, config.top_k, n_buckets=config.n_deciles)
 
-                # Execution-aware backtest: signal at close(t), enter at open(t+1), hold `horizon` days.
-                bt_daily, bt_summary = run_top_k_execution_backtest(
+                # Execution-aware backtests (both modes)
+                # 1) open-to-open: signal at t, enter open(t+1), exit open(t+1+h)
+                bt_daily_oto, bt_summary_oto = run_top_k_execution_backtest(
                     scored_test,
                     score_col="score",
                     open_col="open",
@@ -126,16 +136,81 @@ def run_pipeline(notebook_tag: str = "02", mode: str = "synthetic", config: AppC
                     transaction_cost_bps=config.transaction_cost_bps,
                     rebalance_every=horizon,
                 )
-                rel = relative_summary(bt_daily, bench_daily)
+                rel_oto = relative_summary(bt_daily_oto, bench_daily)
 
-                curve_key = f"{feature_set_name}|{model_name}|{horizon}D"
-                curve_store[curve_key] = bt_daily
-                save_equity_curve(
-                    bt_daily,
-                    config.output_dir / "figures" / f"{notebook_tag}_{mode}_{feature_set_name}_{model_name}_{horizon}d_equity.png",
-                    f"{feature_set_name} | {model_name} | {horizon}D",
+                curve_key_oto = f"{feature_set_name}|{model_name}|{horizon}D|open_to_open"
+                curve_store[curve_key_oto] = bt_daily_oto
+                # Persist curve data; plotting is handled by src.draw_graph
+                oto_curve_path = config.output_dir / "curves" / f"{notebook_tag}_{mode}_{feature_set_name}_{model_name}_{horizon}d_open_to_open_daily.csv"
+                bt_daily_oto.to_csv(oto_curve_path, index=False)
+
+                backtest_rows.append({
+                    "notebook_tag": notebook_tag,
+                    "mode": mode,
+                    "feature_set": feature_set_name,
+                    "feature_groups": ",".join(groups),
+                    "model": model_name,
+                    "n_features_used": len(valid_feat_cols),
+                    "horizon_days": horizon,
+                    "execution_mode": "open_to_open",
+                    **bt_summary_oto,
+                })
+
+                relative_rows.append({
+                    "notebook_tag": notebook_tag,
+                    "mode": mode,
+                    "feature_set": feature_set_name,
+                    "feature_groups": ",".join(groups),
+                    "model": model_name,
+                    "n_features_used": len(valid_feat_cols),
+                    "horizon_days": horizon,
+                    "execution_mode": "open_to_open",
+                    **rel_oto,
+                })
+
+                # 2) close-to-close: signal at t, enter close(t), exit close(t+h)
+                bt_daily_ctc, bt_summary_ctc = run_top_k_execution_backtest_close_to_close(
+                    scored_test,
+                    score_col="score",
+                    close_col="close",
+                    horizon_days=horizon,
+                    top_k=config.top_k,
+                    transaction_cost_bps=config.transaction_cost_bps,
+                    rebalance_every=horizon,
                 )
+                rel_ctc = relative_summary(bt_daily_ctc, bench_daily)
 
+                curve_key_ctc = f"{feature_set_name}|{model_name}|{horizon}D|close_to_close"
+                curve_store[curve_key_ctc] = bt_daily_ctc
+                # Persist curve data; plotting is handled by src.draw_graph
+                ctc_curve_path = config.output_dir / "curves" / f"{notebook_tag}_{mode}_{feature_set_name}_{model_name}_{horizon}d_close_to_close_daily.csv"
+                bt_daily_ctc.to_csv(ctc_curve_path, index=False)
+
+                backtest_rows.append({
+                    "notebook_tag": notebook_tag,
+                    "mode": mode,
+                    "feature_set": feature_set_name,
+                    "feature_groups": ",".join(groups),
+                    "model": model_name,
+                    "n_features_used": len(valid_feat_cols),
+                    "horizon_days": horizon,
+                    "execution_mode": "close_to_close",
+                    **bt_summary_ctc,
+                })
+
+                relative_rows.append({
+                    "notebook_tag": notebook_tag,
+                    "mode": mode,
+                    "feature_set": feature_set_name,
+                    "feature_groups": ",".join(groups),
+                    "model": model_name,
+                    "n_features_used": len(valid_feat_cols),
+                    "horizon_days": horizon,
+                    "execution_mode": "close_to_close",
+                    **rel_ctc,
+                })
+
+                # Shared (per model/horizon/feature-set) diagnostics for signal quality
                 bucket_df = decile_return_table(scored_test, "score", ret_col, n_buckets=config.n_deciles)
                 bucket_df["feature_set"] = feature_set_name
                 bucket_df["model"] = model_name
@@ -159,28 +234,6 @@ def run_pipeline(notebook_tag: str = "02", mode: str = "synthetic", config: AppC
                     **signal,
                 })
 
-                backtest_rows.append({
-                    "notebook_tag": notebook_tag,
-                    "mode": mode,
-                    "feature_set": feature_set_name,
-                    "feature_groups": ",".join(groups),
-                    "model": model_name,
-                    "n_features_used": len(valid_feat_cols),
-                    "horizon_days": horizon,
-                    **bt_summary,
-                })
-
-                relative_rows.append({
-                    "notebook_tag": notebook_tag,
-                    "mode": mode,
-                    "feature_set": feature_set_name,
-                    "feature_groups": ",".join(groups),
-                    "model": model_name,
-                    "n_features_used": len(valid_feat_cols),
-                    "horizon_days": horizon,
-                    **rel,
-                })
-
             # Add momentum baseline per horizon / feature-set block only once conceptually
             mom_test = test[["date", "ticker", "ret_5", ret_col]].dropna().copy()
             mom_daily, mom_summary = run_momentum_baseline(
@@ -191,6 +244,8 @@ def run_pipeline(notebook_tag: str = "02", mode: str = "synthetic", config: AppC
                 transaction_cost_bps=config.transaction_cost_bps,
             )
             curve_store[f"MomentumBaseline_{horizon}D"] = mom_daily
+            mom_path = config.output_dir / "curves" / f"{notebook_tag}_{mode}_MomentumBaseline_{horizon}d_daily.csv"
+            mom_daily.to_csv(mom_path, index=False)
 
     metrics_df = pd.DataFrame(metric_rows).sort_values(["horizon_days", "feature_set", "model"]).reset_index(drop=True)
     backtest_df = pd.DataFrame(backtest_rows).sort_values(["horizon_days", "feature_set", "model"]).reset_index(drop=True)
@@ -207,42 +262,24 @@ def run_pipeline(notebook_tag: str = "02", mode: str = "synthetic", config: AppC
     relative_df.to_csv(relative_path, index=False)
     decile_df.to_csv(decile_path, index=False)
 
-    if not metrics_df.empty:
-        heatmap = metrics_df.query("model == @config.primary_model").pivot_table(
-            index="feature_set",
-            columns="horizon_days",
-            values="rank_ic",
-            aggfunc="mean",
-        )
-        save_heatmap_table(
-            heatmap,
-            config.output_dir / "figures" / f"{notebook_tag}_{mode}_rankic_heatmap.png",
-            "Rank IC Heatmap",
-        )
+    # Plotting is separated into src.draw_graph; pipeline only writes data outputs.
 
-    # choose best primary model strategy by Sharpe
+    # choose best primary model strategy by Sharpe (open_to_open only, for a clean summary page)
     chosen_curve = {}
     chosen_decile = pd.DataFrame()
     if not backtest_df.empty:
-        primary = backtest_df[backtest_df["model"] == config.primary_model].copy()
+        primary = backtest_df[(backtest_df["model"] == config.primary_model) & (backtest_df["execution_mode"] == "open_to_open")].copy()
         best_row = primary.sort_values("sharpe", ascending=False).head(1)
         if not best_row.empty:
             r = best_row.iloc[0]
-            key = f'{r["feature_set"]}|{r["model"]}|{int(r["horizon_days"])}D'
-            chosen_curve["Best ML"] = curve_store.get(key, pd.DataFrame())
+            key = f'{r["feature_set"]}|{r["model"]}|{int(r["horizon_days"])}D|open_to_open'
+            chosen_curve["Best ML (open_to_open)"] = curve_store.get(key, pd.DataFrame())
             chosen_curve["SPY"] = curve_store.get(f'SPY_{int(r["horizon_days"])}D', pd.DataFrame())
             chosen_curve["Momentum Baseline"] = curve_store.get(f'MomentumBaseline_{int(r["horizon_days"])}D', pd.DataFrame())
             chosen_decile = decile_store.get((r["feature_set"], r["model"], int(r["horizon_days"])), pd.DataFrame())
 
+    # Plotting is separated into src.draw_graph; pipeline only writes data outputs.
     summary_path = config.output_dir / "figures" / f"{notebook_tag}_{mode}_four_panel_summary.png"
-    save_four_panel_summary(
-        metrics_df=metrics_df,
-        backtest_df=backtest_df,
-        decile_df=chosen_decile,
-        strategy_curves=chosen_curve,
-        out_path=summary_path,
-        main_model=config.primary_model,
-    )
 
     metadata = {
         "notebook_tag": notebook_tag,
@@ -270,6 +307,7 @@ def run_pipeline(notebook_tag: str = "02", mode: str = "synthetic", config: AppC
         "data_quality": data_quality_path,
         "metadata": metadata_path,
         "summary_figure": summary_path,
+        "curves_dir": (config.output_dir / "curves"),
     }
 
 
@@ -281,15 +319,18 @@ def main() -> None:
 
     config = AppConfig()
     if args.notebook == "00":
+        # Minimal run for quick validation
         config.horizons = [1]
-        config.feature_sets = {"F1_momentum": config.feature_sets["F1_momentum"]}
+        config.feature_sets = {"F1_momentum": ["momentum"]}
     elif args.notebook == "01":
+        # Small subset for mid-stage experimentation (kept lightweight)
         config.horizons = [1, 3]
         config.feature_sets = {
-            "F1_momentum": config.feature_sets["F1_momentum"],
-            "F2_momentum_reversal": config.feature_sets["F2_momentum_reversal"],
-            "F3_plus_risk_liquidity": config.feature_sets["F3_plus_risk_liquidity"],
+            "F1_momentum": ["momentum"],
+            "F2_momentum_reversal": ["momentum", "reversal"],
+            "F3_plus_risk_liquidity": ["momentum", "reversal", "volatility", "liquidity"],
         }
+    # notebook 02 uses the default config.feature_sets (F1–F5 ladder; F5 excludes fundamentals)
     run_pipeline(notebook_tag=args.notebook, mode=args.mode, config=config)
 
 
