@@ -134,7 +134,7 @@ def run_pipeline(notebook_tag: str = "02", mode: str = "synthetic", config: AppC
                     horizon_days=horizon,
                     top_k=config.top_k,
                     transaction_cost_bps=config.transaction_cost_bps,
-                    rebalance_every=horizon,
+                    rebalance_every=1,
                 )
                 rel_oto = relative_summary(bt_daily_oto, bench_daily)
 
@@ -176,7 +176,7 @@ def run_pipeline(notebook_tag: str = "02", mode: str = "synthetic", config: AppC
                     horizon_days=horizon,
                     top_k=config.top_k,
                     transaction_cost_bps=config.transaction_cost_bps,
-                    rebalance_every=horizon,
+                    rebalance_every=1,
                 )
                 rel_ctc = relative_summary(bt_daily_ctc, bench_daily)
 

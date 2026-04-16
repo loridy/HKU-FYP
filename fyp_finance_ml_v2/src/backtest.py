@@ -103,7 +103,9 @@ def run_top_k_execution_backtest(
 
     work["entry_date"] = entry_date
     work["exit_date"] = exit_date
-    work["exec_ret"] = (exit_open / entry_open) - 1
+    # Convert the horizon return into a daily-equivalent return so 1D and 3D runs are comparable.
+    gross_mult = exit_open / entry_open
+    work["exec_ret"] = gross_mult ** (1.0 / horizon_days) - 1.0
 
     # Only keep rows where execution return is defined
     work = work.dropna(subset=["exec_ret", "entry_date", "exit_date"])
@@ -249,7 +251,9 @@ def run_top_k_execution_backtest_close_to_close(
 
     work["entry_date"] = work["date"]
     work["exit_date"] = exit_date
-    work["exec_ret"] = (exit_close / entry_close) - 1
+    # work["exec_ret"] = (exit_close / entry_close) - 1
+    gross_mult = exit_close / entry_close
+    work["exec_ret"] = gross_mult ** (1.0 / horizon_days) - 1.0
 
     work = work.dropna(subset=["exec_ret", "exit_date"])
 
