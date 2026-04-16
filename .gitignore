@@ -1,2 +1,6 @@
-.zip
-.png
+*.zip
+*.png
+*.csv
+*.pyc
+__pycache__/
+*json
