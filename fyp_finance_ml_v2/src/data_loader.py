@@ -9,6 +9,34 @@ import pandas as pd
 from .config import AppConfig
 
 
+def _normalize_price_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize a local cached price DataFrame to the project's canonical schema."""
+    if df.empty:
+        return pd.DataFrame(columns=["date", "ticker", "open", "high", "low", "close", "adj_close", "volume"])
+
+    rename_map = {
+        "Date": "date",
+        "Open": "open",
+        "High": "high",
+        "Low": "low",
+        "Close": "close",
+        "Adj Close": "adj_close",
+        "Volume": "volume",
+        "Symbol": "ticker",
+        "Ticker": "ticker",
+    }
+    out = df.rename(columns=rename_map).copy()
+    keep = ["date", "ticker", "open", "high", "low", "close", "adj_close", "volume"]
+    for col in keep:
+        if col not in out.columns:
+            out[col] = pd.NA
+
+    out = out[keep].copy()
+    out["date"] = pd.to_datetime(out["date"])
+    out["ticker"] = out["ticker"].astype(str).str.strip()
+    return out.sort_values(["ticker", "date"]).reset_index(drop=True)
+
+
 def _normalize_download_frame(df: pd.DataFrame, ticker: Optional[str] = None) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["date", "ticker", "open", "high", "low", "close", "adj_close", "volume"])
@@ -115,8 +143,62 @@ def load_optional_csv(path: Path) -> pd.DataFrame:
     return df
 
 
+def load_cached_prices(path: Path) -> pd.DataFrame:
+    """Load a cached panel of OHLCV rows saved as CSV.
+
+    Expected columns match this project's standard schema:
+    date,ticker,open,high,low,close,adj_close,volume
+    """
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(
+            path,
+            usecols=["date", "ticker", "open", "high", "low", "close", "adj_close", "volume"],
+        )
+    except ValueError:
+        # Some caches may contain extra/missing columns; normalize best-effort.
+        df = pd.read_csv(path)
+    return _normalize_price_frame(df)
+
+
+def _pick_price_cache_path(config: AppConfig) -> Path:
+    # User-provided cache location (preferred): outputs/historical_prices.csv
+    return config.output_dir / "historical_prices.csv"
+
+
 def load_live_data(config: AppConfig) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    prices = download_price_history(config.tickers + [config.benchmark_ticker], config.start_date, config.end_date)
+    cache_path = _pick_price_cache_path(config)
+    cached = load_cached_prices(cache_path)
+
+    desired = list(dict.fromkeys(list(config.tickers) + [config.benchmark_ticker]))
+    start = pd.to_datetime(config.start_date)
+    end = pd.to_datetime(config.end_date)
+
+    prices = pd.DataFrame()
+    have: set[str] = set()
+    if not cached.empty:
+        cached = cached.loc[cached["ticker"].isin(desired)].copy()
+        cached = cached.loc[(cached["date"] >= start) & (cached["date"] < end)].copy()
+        prices = cached
+        have = set(prices["ticker"].unique())
+
+    missing = [t for t in desired if t not in have]
+    if missing:
+        downloaded = download_price_history(missing, config.start_date, config.end_date)
+        if prices.empty:
+            prices = downloaded
+        else:
+            prices = pd.concat([prices, downloaded], ignore_index=True)
+        prices = _normalize_price_frame(prices)
+        prices = prices.drop_duplicates(subset=["date", "ticker"], keep="last").sort_values(["ticker", "date"]).reset_index(drop=True)
+
+        # Update cache so subsequent runs skip downloading.
+        try:
+            prices.to_csv(cache_path, index=False)
+        except Exception:
+            pass
+
     benchmark = prices.loc[prices["ticker"] == config.benchmark_ticker, ["date", "close"]].rename(columns={"close": "benchmark_close"})
 
     macro_frames = [benchmark.copy()]
